@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useRef } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import "./styles/terminal.css";
 
@@ -92,6 +92,8 @@ function App() {
     encryption: "WPA"
   });
 
+  const qrContainerRef = useRef(null);
+
   const computeFinalText = () => {
     switch (currentTemplate) {
       case "free": return qrText;
@@ -102,32 +104,106 @@ function App() {
   };
 
   const handleDownload = () => {
-    const canvas = document.querySelector(".qr-container canvas");
-    if (!canvas) return;
+    if (!qrContainerRef.current) return;
     
-    const link = document.createElement("a");
-    link.href = canvas.toDataURL("image/png");
-    link.download = "qr-code.png";
-    link.click();
+    // Try to get canvas directly first
+    let canvas = qrContainerRef.current.querySelector("canvas");
+    
+    // If no canvas, try to get SVG and convert it
+    if (!canvas) {
+      const svg = qrContainerRef.current.querySelector("svg");
+      if (svg) {
+        const svgData = new XMLSerializer().serializeToString(svg);
+        const img = new Image();
+        img.onload = () => {
+          canvas = document.createElement('canvas');
+          canvas.width = img.width;
+          canvas.height = img.height;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0);
+          // Trigger download
+          const link = document.createElement("a");
+          link.href = canvas.toDataURL("image/png");
+          link.download = "qr-code.png";
+          link.click();
+        };
+        img.src = 'data:image/svg+xml;base64,' + btoa(svgData);
+        return;
+      }
+    }
+    
+    // If canvas exists, proceed with download
+    if (canvas) {
+      const link = document.createElement("a");
+      link.href = canvas.toDataURL("image/png");
+      link.download = "qr-code.png";
+      link.click();
+    }
   };
 
   const handleCopyImage = async () => {
-    const canvas = document.querySelector(".qr-container canvas");
-    if (!canvas) return;
-
+    if (!qrContainerRef.current) return;
+    
     try {
-      const dataUrl = canvas.toDataURL("image/png");
-      const res = await fetch(dataUrl);
-      const blob = await res.blob();
-      await navigator.clipboard.write([
-        new window.ClipboardItem({
-          [blob.type]: blob
-        })
-      ]);
-      alert("QR code copied to clipboard as image!");
+      // Get SVG element
+      const svg = qrContainerRef.current.querySelector("svg");
+      if (!svg) {
+        throw new Error("QR code element not found");
+      }
+
+      // Create a canvas with the same dimensions
+      const canvas = document.createElement('canvas');
+      const svgRect = svg.getBoundingClientRect();
+      canvas.width = svgRect.width;
+      canvas.height = svgRect.height;
+      
+      // Convert SVG to data URL
+      const svgData = new XMLSerializer().serializeToString(svg);
+      const svgBlob = new Blob([svgData], { type: 'image/svg+xml;charset=utf-8' });
+      const URL = window.URL || window.webkitURL || window;
+      const blobURL = URL.createObjectURL(svgBlob);
+      
+      // Create image and draw to canvas
+      const img = new Image();
+      img.onload = async () => {
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue("--background-color").trim();
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(img, 0, 0);
+        
+        try {
+          // Convert canvas to blob and copy to clipboard
+          const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+          if (!blob) {
+            throw new Error("Failed to create image blob");
+          }
+          
+          await navigator.clipboard.write([
+            new ClipboardItem({
+              'image/png': blob
+            })
+          ]);
+          alert("QR code copied to clipboard!");
+        } catch (err) {
+          console.error("Clipboard error:", err);
+          
+          // Fallback: Try to copy as dataURL
+          try {
+            const dataUrl = canvas.toDataURL('image/png');
+            await navigator.clipboard.writeText(dataUrl);
+            alert("QR code copied as data URL (some applications may not support pasting)");
+          } catch (fallbackErr) {
+            console.error("Fallback error:", fallbackErr);
+            alert("Failed to copy image. Your browser might not support this feature.");
+          }
+        }
+        URL.revokeObjectURL(blobURL);
+      };
+      
+      img.src = blobURL;
     } catch (error) {
-      console.error(error);
-      alert("Failed to copy image.");
+      console.error("Main error:", error);
+      alert("Failed to copy image. Please try downloading instead.");
     }
   };
 
@@ -453,14 +529,13 @@ function App() {
 
         {showQR && (
           <>
-            <div className="qr-container">
+            <div className="qr-container" ref={qrContainerRef}>
               <QRCodeSVG
                 value={textToEncode}
                 size={300}
                 fgColor={qrColor.startsWith("var") ? getComputedStyle(document.documentElement).getPropertyValue("--text-color").trim() : qrColor}
                 bgColor={getComputedStyle(document.documentElement).getPropertyValue("--background-color").trim()}
                 level="L"
-                renderAs="canvas"
               />
             </div>
             <div className="button-container">
